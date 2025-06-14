@@ -2,7 +2,7 @@
 --     a. Which prescriber had the highest total number of claims (totaled over all drugs)? Report the npi and the total number of claims.
 SELECT p1.npi, SUM(p2.total_claim_count) AS total_claim
 FROM prescriber AS p1
-	LEFT JOIN prescription AS p2
+	JOIN prescription AS p2
 	ON p1.npi = p2.npi
 WHERE p2.total_claim_count IS NOT NULL
 GROUP BY p1.npi
@@ -50,16 +50,19 @@ LIMIT 1;
 --   b. Which specialty had the most total number of claims for opioids?
 SELECT 
 		p1.specialty_description
-	, 	COUNT(p2.total_claim_count) AS total_claim_count
-	LEFT JOIN prescription AS p2
+	, 	SUM(p2.total_claim_count) AS total_claim_count
+FROM prescriber AS p1
+	JOIN prescription AS p2
 	ON p1.npi = p2.npi
+		JOIN drug AS d
+		ON p2.drug_name = d.drug_name
 WHERE d.opioid_drug_flag = 'Y'
 GROUP BY p1.specialty_description
 ORDER BY total_claim_count DESC
 LIMIT 1;
 
 --ANSWER:
-	"Nurse Practitioner"	175734
+	"Nurse Practitioner"	900845
 	
 --   c. **Challenge Question:** Are there any specialties that appear in the prescriber table that have no associated prescriptions in the prescription table?
 
@@ -76,7 +79,6 @@ FROM drug AS d
 GROUP BY d.generic_name
 ORDER BY MAX(p.total_drug_cost) DESC
 LIMIT 1;																																										
-
 --ANSWER:
 	"PIRFENIDONE"	2829174.3
 
@@ -84,7 +86,7 @@ LIMIT 1;
 --   b. Which drug (generic_name) has the hightest total cost per day? **Bonus: Round your cost per day column to 2 decimal places. Google ROUND to see how this works.**
 SELECT 
 		d.generic_name
-	,	MAX(ROUND((p.total_drug_cost)/(p.total_day_supply), 2)) AS total_cost_perday
+	,	ROUND(SUM(p.total_drug_cost)/SUM(p.total_day_supply), 2) AS total_cost_perday
 	FROM drug AS d
 	JOIN prescription AS p
 	ON d.drug_name = p.drug_name
@@ -93,7 +95,7 @@ ORDER BY total_cost_perday DESC
 LIMIT 1;
 
 --ANSWER:
-	"IMMUN GLOB G(IGG)/GLY/IGA OV50"	7141.11
+	"C1 ESTERASE INHIBITOR"	3495.22
 	
 -- 4. 
 --     a. For each drug in the drug table, return the drug name and then a column named 'drug_type' which says 'opioid' for drugs which have opioid_drug_flag = 'Y', says 'antibiotic' for those drugs which have antibiotic_drug_flag = 'Y', and says 'neither' for all other drugs. **Hint:** You may want to use a CASE expression for this. See https://www.postgresqltutorial.com/postgresql-tutorial/postgresql-case/ 
@@ -122,16 +124,56 @@ FROM drug AS d
 WHERE antibiotic_drug_flag = 'Y'
 GROUP BY d.antibiotic_drug_flag;
 
+--krithika
+
+SELECT 
+		/*CASE 
+			WHEN (SUM(CASE  WHEN opioid_drug_flag='Y' THEN prescription.total_drug_cost  END) > SUM(CASE  WHEN antibiotic_drug_flag='Y' THEN prescription.total_drug_cost  END)) THEN 'Most money spent on opioid' ELSE 'Most money spent on antibiotic'  END,*/
+	 CAST (SUM(CASE  WHEN opioid_drug_flag='Y' THEN prescription.total_drug_cost  END) AS money)AS opioid_cost,
+	 CAST (SUM(CASE  WHEN antibiotic_drug_flag='Y' THEN prescription.total_drug_cost  END)AS money) AS antibiotic_cost
+	
+FROM drug
+ JOIN prescription
+	USING (drug_name
+
+--SUNITHA
+SELECT
+    CASE
+        WHEN drug.opioid_drug_flag = 'Y' THEN 'opioid'
+        WHEN drug.antibiotic_drug_flag = 'Y' THEN 'antibiotic'
+        ELSE 'neither'
+    END AS drug_type,  
+    SUM(prescription.total_drug_cost)::MONEY AS total_spent -- Postgres specific cast to the money data type
+FROM
+    drug 
+INNER JOIN prescription 
+Using(drug_name)
+WHERE drug.opioid_drug_flag = 'Y' OR drug.antibiotic_drug_flag = 'Y'
+GROUP BY drug_type
+ORDER BY total_spent DESC;
+
 -- 5. 
 --     a. How many CBSAs are in Tennessee? **Warning:** The cbsa table contains information for all states, not just Tennessee.
-SELECT COUNT(cbsa) AS cbsa_count
+SELECT COUNT(DISTINCT cbsa)
 FROM cbsa
 WHERE cbsaname LIKE '%TN%';
 
 --ANSWER: 56
 
 --     b. Which cbsa has the largest combined population? Which has the smallest? Report the CBSA name and total population.
-SELECT c.cbsaname, SUM(p.population) AS population
+(SELECT c.cbsaname, SUM(p.population) AS population, 'largest' AS flag
+FROM cbsa AS c
+	JOIN fips_county AS f
+	ON c.fipscounty = f.fipscounty
+		JOIN population AS p
+		ON c.fipscounty = p.fipscounty
+WHERE f.state = 'TN'
+GROUP BY c.cbsaname
+ORDER BY population DESC LIMIT 1)
+
+UNION 
+
+(SELECT c.cbsaname, SUM(p.population) AS population, 'Sallest'.
 FROM cbsa AS c
 	JOIN fips_county AS f
 	ON c.fipscounty = f.fipscounty
@@ -148,18 +190,6 @@ ORDER BY population DESC LIMIT 1;
 		
 --     c. What is the largest (in terms of population) county which is not included in a CBSA? Report the county name and population.
 
-SELECT f.county, SUM(p.population) AS population
-FROM fips_county AS f
-		JOIN population AS p
-		ON f.fipscounty = p.fipscounty
-WHERE f.state = 'TN'
-GROUP BY f.county
-ORDER BY population DESC 
-LIMIT 1;
-
---ANSWER:
-	"SHELBY"	937847
-------
 SELECT fips_county, population,county,state
 FROM population
 INNER JOIN fips_county USING (fipscounty)
@@ -170,6 +200,26 @@ LIMIT 1;
 --ANSWER:
 	"(SEVIER,TN,47155,47)"	95523	"SEVIER"	"TN"
 
+---Krithika
+SELECT  county,population
+FROM fips_county
+LEFT JOIN cbsa
+  ON fips_county.fipscounty=cbsa.fipscounty
+JOIN population
+  ON fips_county.fipscounty=population.fipscounty
+ WHERE cbsa.fipscounty IS  NULL
+ORDER BY population DESC
+
+--Dibran
+SELECT county, population
+FROM fips_county
+INNER JOIN population
+USING(fipscounty)
+WHERE fipscounty NOT IN (
+	SELECT fipscounty
+	FROM cbsa
+)
+ORDER BY population DESC;
 -- 6. 
 --     a. Find all rows in the prescription table where total_claims is at least 3000. Report the drug_name and the total_claim_count.
 SELECt 
