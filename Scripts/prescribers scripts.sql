@@ -37,7 +37,7 @@ SELECT
 		p1.specialty_description
 	,	SUM(p2.total_claim_count) AS total_claim
 FROM prescriber AS p1
-	JOIN prescription AS p2
+	LEFT JOIN prescription AS p2
 	ON p1.npi = p2.npi
 WHERE p2.total_claim_count IS NOT NULL
 GROUP BY p1.specialty_description
@@ -52,7 +52,7 @@ SELECT
 		p1.specialty_description
 	, 	SUM(p2.total_claim_count) AS total_claim_count
 FROM prescriber AS p1
-	JOIN prescription AS p2
+	LEFT JOIN prescription AS p2
 	ON p1.npi = p2.npi
 		JOIN drug AS d
 		ON p2.drug_name = d.drug_name
@@ -64,9 +64,74 @@ LIMIT 1;
 --ANSWER:
 	"Nurse Practitioner"	900845
 	
---   c. **Challenge Question:** Are there any specialties that appear in the prescriber table that have no associated prescriptions in the prescription table?
+--   c. **Challenge Question:** Are there any specialties that appear in the prescriber table that have no associated prescriptions in the prescription table
+SELECT DISTINCT(specialty_description)
+FROM prescriber
+WHERE specialty_description NOT IN 
+	(SELECT DISTINCT(specialty_description)
+	 FROM prescriber
+	 JOIN prescription
+	 USING(npi)
+	 WHERE drug_name IS NOT NULL);
 
 --   d. **Difficult Bonus:** *Do not attempt until you have solved all other problems!* For each specialty, report the percentage of total claims by that specialty which are for opioids. Which specialties have a high percentage of opioids?
+--OPTION 1 (dibran's)
+SELECT
+	specialty_description,
+	
+	SUM(
+		CASE WHEN opioid_drug_flag = 'Y' THEN total_claim_count
+		ELSE 0
+	END
+	) as opioid_claims,
+	
+	SUM(total_claim_count) AS total_claims,
+	
+	SUM(
+		CASE WHEN opioid_drug_flag = 'Y' THEN total_claim_count
+		ELSE 0
+	END
+	) * 100.0 /  SUM(total_claim_count) AS opioid_percentage
+	
+FROM prescriber
+INNER JOIN prescription
+USING(npi)
+INNER JOIN drug
+USING(drug_name)
+GROUP BY specialty_description
+ORDER BY opioid_percentage DESC;
+
+--OPTION 2 (Jennifer)
+WITH ClaimsBySpecialty AS (
+    SELECT
+        prescriber.specialty_description,
+        SUM(prescription.total_claim_count) AS total_claims_for_specialty,
+        SUM(CASE
+                WHEN drug.opioid_drug_flag = 'Y' THEN prescription.total_claim_count
+                ELSE 0
+            END) AS total_opioid_claims_for_specialty
+    FROM prescriber
+   INNER JOIN prescription
+        ON prescriber.npi = prescription.npi
+   INNER JOIN drug
+        ON prescription.drug_name = drug.drug_name
+    GROUP BY prescriber.specialty_description
+)
+SELECT
+    cbs.specialty_description,
+    cbs.total_claims_for_specialty,
+    cbs.total_opioid_claims_for_specialty,
+      CASE
+         WHEN cbs.total_claims_for_specialty > 0 THEN
+            ROUND(
+                (CAST(cbs.total_opioid_claims_for_specialty AS NUMERIC) * 100.0) / cbs.total_claims_for_specialty,
+                2 -- Round to 2 decimal places
+            )
+         ELSE
+            0.0
+     END AS percentage_opioid_claims
+FROM ClaimsBySpecialty AS cbs
+ORDER BY percentage_opioid_claims DESC; cbs.specialty_description
 
 -- 3. 
 --   a. Which drug (generic_name) had the highest total drug cost?
@@ -105,38 +170,8 @@ SELECT drug_name,
 		 ELSE 'neither'
 		 END AS drug_type
 FROM drug
+
 	-- b. Building neitheroff of the query you wrote for part a, determine whether more was spent (total_drug_cost) on opioids or on antibiotics. Hint: Format the total costs as MONEY for easier comparision.
-SELECT 
-		d.opioid_drug_flag
-	, 	SUM(p.total_drug_cost) :: MONEY AS opioid_total_cost
-FROM drug AS d
-	LEFT JOIN prescription AS p
-	ON d.drug_name = p.drug_name
-WHERE opioid_drug_flag = 'Y'
-GROUP BY opioid_drug_flag
-UNION ALL
-SELECT 
-		d.antibiotic_drug_flag
-	,	SUM(p.total_drug_cost):: MONEY AS total_cost
-FROM drug AS d
-	LEFT JOIN prescription AS p
-	ON d.drug_name = p.drug_name
-WHERE antibiotic_drug_flag = 'Y'
-GROUP BY d.antibiotic_drug_flag;
-
---krithika
-
-SELECT 
-		/*CASE 
-			WHEN (SUM(CASE  WHEN opioid_drug_flag='Y' THEN prescription.total_drug_cost  END) > SUM(CASE  WHEN antibiotic_drug_flag='Y' THEN prescription.total_drug_cost  END)) THEN 'Most money spent on opioid' ELSE 'Most money spent on antibiotic'  END,*/
-	 CAST (SUM(CASE  WHEN opioid_drug_flag='Y' THEN prescription.total_drug_cost  END) AS money)AS opioid_cost,
-	 CAST (SUM(CASE  WHEN antibiotic_drug_flag='Y' THEN prescription.total_drug_cost  END)AS money) AS antibiotic_cost
-	
-FROM drug
- JOIN prescription
-	USING (drug_name
-
---SUNITHA
 SELECT
     CASE
         WHEN drug.opioid_drug_flag = 'Y' THEN 'opioid'
@@ -152,6 +187,9 @@ WHERE drug.opioid_drug_flag = 'Y' OR drug.antibiotic_drug_flag = 'Y'
 GROUP BY drug_type
 ORDER BY total_spent DESC;
 
+--ANSWER: 
+	"opioid"	"$105,080,626.37"
+"antibiotic"	"$38,435,121.26"
 -- 5. 
 --     a. How many CBSAs are in Tennessee? **Warning:** The cbsa table contains information for all states, not just Tennessee.
 SELECT COUNT(DISTINCT cbsa)
@@ -200,7 +238,6 @@ LIMIT 1;
 --ANSWER:
 	"(SEVIER,TN,47155,47)"	95523	"SEVIER"	"TN"
 
----Krithika
 SELECT  county,population
 FROM fips_county
 LEFT JOIN cbsa
@@ -210,7 +247,6 @@ JOIN population
  WHERE cbsa.fipscounty IS  NULL
 ORDER BY population DESC
 
---Dibran
 SELECT county, population
 FROM fips_county
 INNER JOIN population
@@ -222,11 +258,12 @@ WHERE fipscounty NOT IN (
 ORDER BY population DESC;
 -- 6. 
 --     a. Find all rows in the prescription table where total_claims is at least 3000. Report the drug_name and the total_claim_count.
-SELECt 
+SELECT
 		drug_name
 	,	total_claim_count
 FROM prescription
-WHERE total_claim_count >= 3000
+WHERE total_claim_count >= 3000;
+
 
 --     b. For each instance that you found in part a, add a column that indicates whether the drug is an opioid.
 SELECt 
@@ -296,7 +333,7 @@ WHERE specialty_description = 'Pain Management'
 SELECT 
 		cc.npi
 	,	cc.drug_name
-	,	COALESCE(p.total_claim_count, 0)
+	,	COALESCE(p.total_claim_count, 0) -- first identify the column rhat has a null value
 FROM prescription AS p
 	RIGHT JOIN cte_claims AS cc
 	ON p.npi = cc.npi
